@@ -2,6 +2,7 @@ import numpy  as np
 from scipy.spatial import ConvexHull
 import torch
 from torch.autograd import Variable
+from numba import jit
 import time
 
 def poly_area(x,y):
@@ -24,7 +25,7 @@ def polygon_clip(subjectPolygon, clipPolygon):
    """
    def inside(p):
       return(cp2[0]-cp1[0])*(p[1]-cp1[1]) > (cp2[1]-cp1[1])*(p[0]-cp1[0])
- 
+
    def computeIntersection():
       dc = [ cp1[0] - cp2[0], cp1[1] - cp2[1] ]
       dp = [ s[0] - e[0], s[1] - e[1] ]
@@ -109,6 +110,8 @@ def iou_with_angle(pred, truth):
             if inter_point is not None:
                 inter_hull = ConvexHull(inter_point)
                 interaction = inter_hull.volume
+            else:
+                interaction = 0.0
             iou_a = interaction / (union - interaction)
             if iou_a > max_iou:
                 max_iou = iou_a
@@ -173,3 +176,10 @@ if __name__ == '__main__':
     iou, idx = iou_with_angle(pred, truth)
     print(iou)
     print(idx)
+    pred = torch.rand(169*5,4)
+    truth = torch.rand(30,4)
+    t0 = time.time()
+    for i in range(64):
+        iou, idx = iou_no_angle(pred, truth)
+    t1 = time.time()
+    print('cost time %f'%(t1-t0))
