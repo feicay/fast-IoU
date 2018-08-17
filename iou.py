@@ -1,6 +1,7 @@
 import numpy  as np
 from scipy.spatial import ConvexHull
 import torch
+from torch.autograd import Variable
 import time
 
 def poly_area(x,y):
@@ -55,7 +56,7 @@ def polygon_clip(subjectPolygon, clipPolygon):
           return None
    return(outputList)
 
-def iou(pred, truth):
+def iou_with_angle(pred, truth):
     """the pred is the predicted box [x, y, w ,h, im, re]
         (x, y) is the centure of the box, (w, h) is the width and the height of the box
         (im, re) means sin(theta), cos(theta), theta is the intersection angle between box and x-axis
@@ -92,11 +93,11 @@ def iou(pred, truth):
     iou = torch.zeros(num_p)
     idx = torch.zeros(num_p)
     for i in range(num_p):
-        pa = pred_point[i,4,2].numpy()
+        pa = pred_point[i,:,:].numpy()
         max_iou = 0
         max_idx = 0
         for j in range(num_t):
-            pb = truth_point[j,4,2].numpy()
+            pb = truth_point[j,:,:].numpy()
             if pb[0,0] < 0.000001:
                 break
             hull1 = ConvexHull(pa)
@@ -113,8 +114,41 @@ def iou(pred, truth):
                 max_iou = iou_a
                 max_idx = j
         iou[i] = max_iou
+        idx[i] = max_idx
+    return iou, idx
 
-
+#this is the vectorized box IOU calculation method
+def iou_no_angle(pred_box, truth_box):
+    num_pred, num_coords = pred_box.size()
+    assert(num_coords == 4)
+    num_truth, num_coords = truth_box.size()
+    assert(num_coords == 4)
+    w = Variable(torch.Tensor([[1,0,1,0],[0,1,0,1],[-0.5,0,0.5,0],[0,-0.5,0,0.5]]))
+    zero = Variable(torch.zeros(num_truth))
+    iou = Variable(torch.zeros(num_pred))
+    if pred_box.is_cuda:
+        w = w.cuda()
+        zero = zero.cuda()
+        iou = iou.cuda()
+    truth_box_ex = truth_box.mm(w)
+    pred_box_ex = pred_box.mm(w)
+    pred_box_ex2 = pred_box_ex.view(1,4*num_pred).expand(num_truth,4*num_pred)
+    pred_box_ex3 = pred_box_ex2.view(num_truth,num_pred,4).permute(1,0,2)
+    truth_box_ex3 = truth_box_ex.expand(num_pred, num_truth, 4)
+    left = torch.max(pred_box_ex3[:,:,0], truth_box_ex3[:,:,0])
+    right = torch.min(pred_box_ex3[:,:,2], truth_box_ex3[:,:,2])
+    up = torch.max(pred_box_ex3[:,:,1], truth_box_ex3[:,:,1])
+    down = torch.min(pred_box_ex3[:,:,3], truth_box_ex3[:,:,3])
+    intersection_w = torch.max( right.sub(left), zero)
+    intersection_h = torch.max( down.sub(up), zero)
+    intersection = intersection_w.mul(intersection_h)
+    w_truth = truth_box[:,2].view(1,num_truth).expand(num_pred, num_truth)
+    h_truth = truth_box[:,3].view(1,num_truth).expand(num_pred, num_truth)
+    w_pred = pred_box[:,2].view(num_pred,1).expand(num_pred, num_truth)
+    h_pred = pred_box[:,3].view(num_pred,1).expand(num_pred, num_truth)
+    union = torch.add(w_truth.mul(h_truth), w_pred.mul(h_pred)).sub(intersection)
+    iou,idx = intersection.div(union).max(dim=1)
+    return iou, idx
 
 def test():
     a = np.array([[0.1, 0.1],[0.5,0.5],[0.9,0.2],[0.8,0.4]])
@@ -133,10 +167,9 @@ def test():
     #print('iou = %f'%iou)
 
 if __name__ == '__main__':
-    t0 = time.time()
-    N = 10000
-    for i in range(N):
-        test()
-    t1 = time.time()
-    t = (t1 - t0)
-    print('iou cost time %f'%t)
+    truth = torch.Tensor([[0.2,0.2,0.1,0.1,0,1],[0.5,0.5,0.2,0.1,-1,0],[0.3,0.3,0.2,0.2,1,0]])
+    pred = torch.Tensor([[0.2,0.2,0.1,0.1,0.7,0.7],[0.5,0.5,0.2,0.1,-0.7,0.7],[0.3,0.3,0.2,0.1,1,0]])
+    print(pred.size())
+    iou, idx = iou_with_angle(pred, truth)
+    print(iou)
+    print(idx)
